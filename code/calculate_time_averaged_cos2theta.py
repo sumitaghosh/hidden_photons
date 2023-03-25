@@ -1,12 +1,14 @@
+from time import time
+
+import numpy as np
+from matplotlib.colors import LogNorm
+from matplotlib.pyplot import figure, plot, legend, show, xlabel, ylabel, imshow, colorbar, title, vlines
 from numpy import zeros, sort, pi, arccos, sin, cos, random, trapz, array, append, argmax, argmin, linspace, logspace, \
     add, subtract, divide, sqrt, load, savez, abs, seterr, transpose
-from matplotlib.pyplot import figure, plot, legend, show, xlabel, ylabel, imshow, colorbar, title, vlines
-from matplotlib.colors import LogNorm
 from scipy.integrate import cumtrapz
-from scipy.stats import norm
 from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
-from time import time
+from scipy.stats import norm
 
 seterr(divide='raise')  # so that try-except can be used later to filter out warnings
 debugging = True  # for when the code isn't working, and it would be helpful to have more print statements running
@@ -37,7 +39,8 @@ def costh2Z(time_days, costh_X, phi_X, experiment_latitude):
             + costh_X * sin(experiment_latitude)) ** 2
 
 
-def get_time_averaged_cos2th_pdf_function(time_days, latitude, nt=2000, ngen=100000, make_plots=False, block=True):
+def get_time_averaged_cos2th_pdf_function(time_days, latitude, nt=2000, ngen=100000, make_plots=False, block=True,
+                                          save_interpolation=False, file_name='CAPP_pdf_to_interpolate'):
     """
     Calculates the CDF of cos2theta, the square of the dot product between the polarization of the hidden photon and the
     axis of the haloscope cavity, for a given desired CL. Code is modified from
@@ -48,6 +51,8 @@ def get_time_averaged_cos2th_pdf_function(time_days, latitude, nt=2000, ngen=100
     :param ngen: integer number of DP polarizations to sample over
     :param make_plots: boolean option to make plots
     :param block: if plots are made, boolean option to require all plots be closed before the next bit of code runs
+    :param save_interpolation: boolean option to save some points in the PDF to interpolate into a function later
+    :param file_name: file name to save the file to!
     :return: 
     """
     # uniform distribution over the unit sphere for the polarization
@@ -120,7 +125,8 @@ def get_time_averaged_cos2th_pdf_function(time_days, latitude, nt=2000, ngen=100
     pdf_y_axis_values[-1] = 0
     pdf_x_axis_values = append(0, append(pdf_x_axis_values, 1))
     pdf_y_axis_values = append(0, append(pdf_y_axis_values, 0))
-    savez('CAPP_pdf_to_interpolate.npz', pdf_x_axis_values=pdf_x_axis_values, pdf_y_axis_values=pdf_y_axis_values)
+    if save_interpolation:
+        savez(file_name + '.npz', pdf_x_axis_values=pdf_x_axis_values, pdf_y_axis_values=pdf_y_axis_values)
     pdf_function = interp1d(pdf_x_axis_values, pdf_y_axis_values)
     return pdf_function
 
@@ -177,6 +183,7 @@ def get_cos2theta_and_pdf_array(cos2theta_pdf_function, num_pts=500, make_plot=F
         cos2theta_array[0], cos2theta_array[-1],
         hopefully_equals_1))
     if make_plot:
+        print(print_preamble(), 'Plotting the PDF of cos2theta (the random variable) over all its possible values.')
         figure()
         plot(cos2theta_array, cos2theta_pdf)
         xlabel('$<\\cos^2(\\theta)>$')
@@ -226,39 +233,55 @@ def find_cos2theta_from_joint_pdf(cos2theta_pdf_function, CL_percentage, start_t
     desired_cdf_value = CL_percentage / 100
     x0_numerator = norm.ppf(desired_cdf_value)
     print(print_preamble(), 'x0 numerator for CL of', CL_percentage, 'is', x0_numerator)
-
+    print()
+    print(print_preamble(), 'Now we calculate joint PDF between cos2theta and cavity power fluctuations by multiplying')
+    print(print_preamble(), 'the PDF above with the normalized gaussian PDF of the cavity power fluctuations.')
+    print()
     # now make up the pdf 2D arrays
     joint_pdf_values = zeros((len(x0_denominator_values_to_try), num_pts, num_pts))
     for k, (c, p) in enumerate(zip(c_array, cos2theta_pdf_array)):  # using array-valued inputs to make this run faster
-        # normalized_power_pdf = norm.pdf([x_array], (x0_numerator / transpose([x0_denominator_values_to_try])) * c, 1)
-        # joint_pdf_values[:, :, k] = p * normalized_power_pdf
         # the joint pdf is found by multiplying two pdfs together
         joint_pdf_values[:, :, k] = get_joint_pdf([x_array], c, p,
                                                   x0=(x0_numerator / transpose([x0_denominator_values_to_try])))
-    print(print_preamble(), 'joint pdf arrays made')
-    # get_joint_pdf(x, cos2theta, cos2theta_pdf, x0=1.645 / 0.024)
-    # normalized_power_pdf = norm.pdf(x, x0 * cos2theta, 1)  # this is the PDF of a normalized gaussian random variable
-    # return cos2theta_pdf * normalized_power_pdf
-
-    # now integrate the joint PDFs over the possible cos2theta values + get CDF arrays
+    print(print_preamble(), 'joint pdf arrays made; joint_pdf_values.shape =', joint_pdf_values.shape)
+    if make_plots:
+        print(print_preamble(), 'now plotting one of the joint pdf arrays')
+        labels_for_each_curve = ['x0 = ' + str(x0_numerator) + ' / ' + str(den) for den in x0_denominator_values_to_try]
+        random_variable_parameter_limits = [c_array[0], c_array[-1], x_array[0], x_array[-1]]  # for imshow to look nice
+        # for i in range(len(joint_pdf_values)):  # how about we just pick one
+        i = 7  # this is arbitrary! future scientists who come look at this code, please mess around with this <3
+        joint_pdf_to_plot = joint_pdf_values[i]
+        joint_pdf_to_plot[joint_pdf_to_plot <= 0.0001] = 0.0001  # so the logscale colorbar looks nice
+        figure()
+        imshow(joint_pdf_to_plot, aspect='auto', origin='lower', norm=LogNorm(),
+               extent=random_variable_parameter_limits)
+        colorbar()
+        xlabel('$\\cos(\\theta)$')
+        ylabel('Normalized power fluctuations')
+        title('Joint PDF for ' + labels_for_each_curve[i])
+        show(block=False)
+    print(print_preamble(), 'now integrate the joint PDFs over the possible cos2theta values + get CDF arrays')
     cdf_array = []
     if make_plots:
         figure()
     for joint_pdf, cos2theta in zip(joint_pdf_values, x0_denominator_values_to_try):
         integrated_pdf = [trapz(p_array, c_array) for p_array in joint_pdf]
         if make_plots:
-            plot(x_array, integrated_pdf, label=cos2theta)
+            plot(x_array, integrated_pdf, label='cos2theta guess = %.2f' % cos2theta)
         # integrate to 0 to get the CDF for a zero power excess
         cdf_array.append(trapz(integrated_pdf, x_array))
 
     if make_plots:
         xlabel('normalized power fluctuation')
-        ylabel('PDF for $\\cos^2(\\theta)$')
+        ylabel('Integrated joint PDF for $\\cos^2(\\theta)$')
         legend()
         show(block=False)
-
+        print(print_preamble(), 'Integrate the curves above over power to calculate the CL for each guess of cos2theta')
+        print(print_preamble(), 'Then we can plot the guesses versus their CLs and interpolate to find the CL we want.')
         figure()
         plot(x0_denominator_values_to_try, cdf_array)
+        plot([x0_denominator_values_to_try[0], x0_denominator_values_to_try[-1]],
+             [1 - desired_cdf_value, 1 - desired_cdf_value], 'k--')  # as comparison to the desired CDF value
         xlabel('$<\\cos^2(\\theta)>$')
         ylabel('CL of hidden photon exclusion')
         show(block=block)
@@ -267,42 +290,54 @@ def find_cos2theta_from_joint_pdf(cos2theta_pdf_function, CL_percentage, start_t
     x0_function = interp1d(cdf_array, x0_denominator_values_to_try)  # for any CL, what x0 do we need?
     cos2theta_value = x0_function(1 - desired_cdf_value)
     print(print_preamble(), 'Using interpolation, the calculated value of cos2theta is', cos2theta_value,
-          'for a CL of', CL_percentage)
+          'for a CL of', CL_percentage, '%')
     return cos2theta_value
 
 
-def save_joint_pdf_arrays(joint_pdf_npz_file_name, x0_numerator_values_to_try, x0_denominator_values_to_try,
-                          cos2theta_pdf_function, num_pts=500):
+def make_joint_pdf_arrays(x0_numerator_values_to_try, x0_denominator_values_to_try, cos2theta_pdf_function,
+                          joint_pdf_npz_file_name='', num_pts=500, save_for_plotting=False):
     """
     Saves and returns the joint PDF arrays along with the values of normalized power and cos2theta used to calculate
     them and the labels associated with each joint PDF array for plotting purposes.
-    :param joint_pdf_npz_file_name: name of file containing the joint PDF arrays calculated with cos2theta_pdf_function
     :param x0_numerator_values_to_try: calculated using norm.ppf(desired_cdf_value)
     :param x0_denominator_values_to_try: from find_cos2theta_from_joint_pdf() - these are candidate cos2theta values
     :param cos2theta_pdf_function: which function to use for the PDF of cos2theta, dependent on timing information.
+    :param joint_pdf_npz_file_name: name of file containing the joint PDF arrays calculated with cos2theta_pdf_function
     :param num_pts: Number of points for the simulation. You can input a lower number if your computer is slow.
+    :param save_for_plotting: Boolean for whether to save the things being returned
     :return: the joint PDFs, the arrays for normalized power and cos2theta, and labels for each joint PDF
     """
     # first the two random variables
     x_array = linspace(-5, 80, num_pts)  # possible values of the normalized power fluctuation
     c_array, cos2theta_pdf_array = get_cos2theta_and_pdf_array(cos2theta_pdf_function)
 
+    # make sure the x0 values are all arrays! Need that to be true for the rest of this function.
+    x0_numerator_values_to_try = np.atleast_1d(x0_numerator_values_to_try)
+    x0_denominator_values_to_try = np.atleast_1d(x0_denominator_values_to_try)
+    assert x0_numerator_values_to_try.size == x0_denominator_values_to_try.size
+
+    print(print_preamble(), 'trying out the following values for the x0 numerator:', x0_numerator_values_to_try)
+    print(print_preamble(), 'trying out the following values for the x0 denominator:', x0_denominator_values_to_try)
+
     # now potential desired values of cos2theta and our CL, calculated using find_cos2theta_from_joint_pdf()
     labels_for_each_curve = ['standard gaussian for 90% CL', 'standard gaussian for 95% CL']
     labels_for_each_curve.extend(['x0 = ' + str(num) + ' / ' + str(den)
                                   for num, den in zip(x0_numerator_values_to_try, x0_denominator_values_to_try)])
+    x0_list = np.divide(x0_numerator_values_to_try, x0_denominator_values_to_try)
     # now make up the pdf 2D arrays
     joint_pdf_values = zeros((len(x0_denominator_values_to_try) + 2, num_pts, num_pts))
     for i, x in enumerate(x_array):
         for j, (c, p) in enumerate(zip(c_array, cos2theta_pdf_array)):
             joint_pdf_values[0, i, j] = norm.pdf(x, 1.282, 1)  # for the 90% CL
             joint_pdf_values[1, i, j] = norm.pdf(x, 1.645, 1)  # for the 95% CL
-            for k, (numerator, denominator) in enumerate(zip(x0_numerator_values_to_try, x0_denominator_values_to_try)):
-                joint_pdf_values[k + 2, i, j] = get_joint_pdf(x, c, p, x0=numerator / denominator)
+            joint_pdf_values[2:, i, j] = get_joint_pdf(x, c, p, x0=x0_list)
+            # for k, x0 in enumerate(x0_list):
+            #     joint_pdf_values[k + 2, i, j] = get_joint_pdf(x, c, p, x0=x0)
 
-    # finally save the arrays so that they can be called in make_joint_pdf_plots()
-    savez(joint_pdf_npz_file_name + '.npz', joint_pdf_arrays=joint_pdf_values,
-          cos2theta_array=c_array, normalized_power_array=x_array, labels_for_each_curve=labels_for_each_curve)
+    if save_for_plotting:
+        # finally save the arrays so that they can be called in make_joint_pdf_plots()
+        savez(joint_pdf_npz_file_name + '.npz', joint_pdf_arrays=joint_pdf_values,
+              cos2theta_array=c_array, normalized_power_array=x_array, labels_for_each_curve=labels_for_each_curve)
     return joint_pdf_values, c_array, x_array, labels_for_each_curve
 
 
@@ -330,7 +365,8 @@ def save_instantaneous_joint_pdf_arrays(file_name='joint_pdf_arrays', re_calcula
     else:
         cos2theta_values = [0.076, 0.024, 0.0025, 0.0025]  # from find_cos2theta_from_joint_pdf()
     numerator_values = [1.282, 1.645, 1.282, 1.645]  # calculated using norm.ppf(desired_cdf_value)
-    save_joint_pdf_arrays(file_name, numerator_values, cos2theta_values, cos2theta_pdf_function)
+    make_joint_pdf_arrays(numerator_values, cos2theta_values, cos2theta_pdf_function,
+                          joint_pdf_npz_file_name=file_name, save_for_plotting=True)
     print(print_preamble(), 'joint pdf arrays for instantaneous measurements have been saved')
     return file_name
 
@@ -366,32 +402,28 @@ def save_CAPP_15hr_joint_pdf_arrays(file_name='CAPP_spike_pdf_arrays', re_calcul
     print(print_preamble(), 'cos2theta found for CAPP to be', test_value)
     numerator_values = [1.282, 1.282, 1.282, 1.282]  # calculated using norm.ppf(desired_cdf_value)
     cos2theta_values = [test_value, 0.076, 0.024, 0.0025]  # from find_cos2theta_from_joint_pdf()
-    save_joint_pdf_arrays(file_name, numerator_values, cos2theta_values, cos2theta_pdf_function)
+    make_joint_pdf_arrays(numerator_values, cos2theta_values, cos2theta_pdf_function,
+                          joint_pdf_npz_file_name=file_name, save_for_plotting=True)
     print(print_preamble(), 'joint pdf arrays for CAPP have been saved')
     return file_name
 
 
-def make_joint_pdf_plots(joint_pdf_npz_file_name, number_of_joint_pdfs_to_plot=2, block=True):
+def make_joint_pdf_plots(joint_pdf_values, c_array, x_array, labels_for_each_curve, block=True):
     """
-    Plots the joint PDFs between cos2theta (the square of the dot product of the hidden photon polarization) and the 
-    axis of the cavity, the PDFs integrated over all values of cos2theta, and the corresponding CDFs as a function of 
+    Plots the joint PDFs between cos2theta (the square of the dot product of the hidden photon polarization) and the
+    axis of the cavity, the PDFs integrated over all values of cos2theta, and the corresponding CDFs as a function of
     the normalized power fluctuations.
-    :param joint_pdf_npz_file_name: .npz file containing the joint PDF arrays calculated with cos2theta_pdf_function
-    :param number_of_joint_pdfs_to_plot: number of joint pdfs to plot, skipping the standard gaussians
+    :param joint_pdf_values: the joint PDFs that will be plotted
+    :param c_array: the array for cos2theta
+    :param x_array: the array for normalized power
+    :param labels_for_each_curve: labels for each joint PDF
     :param block: boolean option to require all plots be closed before the next bit of code runs
     :return: nothing
     """
-    # first load the npz file with the joint pdf arrays
-    npz_file = load(joint_pdf_npz_file_name + '.npz')
-    joint_pdf_values = npz_file['joint_pdf_arrays']
-    labels_for_each_curve = npz_file['labels_for_each_curve']
-    x_array = npz_file['normalized_power_array']
-    c_array = npz_file['cos2theta_array']
-
     # plot the joint PDF for the correct value of cos2theta for each CL, where cos2theta is the denominator of x0
     random_variable_parameter_limits = [c_array[0], c_array[-1], x_array[0], x_array[-1]]
-    for i in range(number_of_joint_pdfs_to_plot):
-        joint_pdf_to_plot = joint_pdf_values[i + 2]
+    for i in range(len(joint_pdf_values)):
+        joint_pdf_to_plot = joint_pdf_values[i]
         joint_pdf_to_plot[joint_pdf_to_plot <= 0.0001] = 0.0001  # so the logscale colorbar looks nice
         figure()
         imshow(joint_pdf_to_plot, aspect='auto', origin='lower', norm=LogNorm(),
@@ -399,7 +431,7 @@ def make_joint_pdf_plots(joint_pdf_npz_file_name, number_of_joint_pdfs_to_plot=2
         colorbar()
         xlabel('$\\cos(\\theta)$')
         ylabel('Normalized power fluctuations')
-        title('Joint PDF for ' + labels_for_each_curve[i + 2])
+        title('Joint PDF for ' + labels_for_each_curve[i])
         show(block=False)
 
     # calculate the pdfs and cdfs
@@ -415,7 +447,7 @@ def make_joint_pdf_plots(joint_pdf_npz_file_name, number_of_joint_pdfs_to_plot=2
     figure()
     for pdf, label in zip(integrated_pdfs, labels_for_each_curve):
         plot(x_array, pdf, label=label)
-    xlabel('normalized power')
+    xlabel('normalized power fluctuations')
     ylabel('joint pdf')
     legend()
     show(block=False)
@@ -427,24 +459,10 @@ def make_joint_pdf_plots(joint_pdf_npz_file_name, number_of_joint_pdfs_to_plot=2
     plot([x_array[0], x_array[-1]], [0.05, 0.05], 'k--')
     plot([x_array[0], x_array[-1]], [0.10, 0.10], 'k--')
     vlines(0, 0, 1, colors='k', linestyles='--')
-    xlabel('normalized power')
+    xlabel('normalized power fluctuations')
     ylabel('joint cdf')
     legend()
     show(block=block)
 
 
-def main(run_CAPP_or_instantaneous='CAPP'):  # function for what you're running
-    if run_CAPP_or_instantaneous == 'CAPP':
-        print(time() - start_time, 'Calculating cos2theta for CAPP')
-        CAPP_file_name = save_CAPP_15hr_joint_pdf_arrays(make_plots=True, block=False)
-        make_joint_pdf_plots(CAPP_file_name, number_of_joint_pdfs_to_plot=1)
-    elif run_CAPP_or_instantaneous == 'instantaneous':
-        print(time() - start_time, 'Calculating cos2theta for an instantaneous delta function measurement')
-        file_name = save_instantaneous_joint_pdf_arrays(re_calculate_test_value=True, make_plots=True, block=False)
-        make_joint_pdf_plots(file_name)
-    else:
-        print(time() - start_time, 'Please choose either CAPP or instantaneous to calculate the optimal <cos2theta>')
-
-
-if __name__ == "__main__":  # if this is the script you run, and you're not just calling this script on another script
-    main()
+print(print_preamble(), 'The number to the left tells you how long it\'s been since the code started running.')
