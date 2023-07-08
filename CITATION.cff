@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Ghosh"
+  given-names: "Sumita"
+  orcid: "https://orcid.org/0000-0003-3502-0063"
+title: "Hidden Photons from Axion Exclusions"
+version: 1.0.0
+doi: 10.5281/zenodo.1234
+date-released: 2023-07-07
+url: "https://github.com/sumitaghosh/hidden_photons"
